@@ -2,3 +2,6 @@
 pyyaml
 requests
 dataclasses_json
+moviepy
+numpy
+scipy
