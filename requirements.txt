@@ -1,0 +1,4 @@
+# requirements.txt
+pyyaml
+requests
+dataclasses_json
