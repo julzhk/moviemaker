@@ -5,3 +5,7 @@ dataclasses_json
 moviepy
 numpy
 scipy
+shotstack-sdk
+jupyter
+ruff
+faker
