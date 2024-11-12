@@ -11,3 +11,4 @@ ruff
 faker
 requests-mock
 Pillow==9.5.0
+playwright

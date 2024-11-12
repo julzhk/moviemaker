@@ -1,10 +1,9 @@
+from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 import yaml
 from dataclasses_json import dataclass_json, Undefined
 from moviepy.video.fx.resize import resize
-from moviepy.video.io.VideoFileClip import VideoFileClip
-from moviepy.video.VideoClip import VideoClip
 
 from moviepy.config import change_settings
 from moviepy.editor import *
@@ -14,6 +13,19 @@ from utils import ShotStack
 change_settings(
     {"IMAGEMAGICK_BINARY": "/usr/local/Cellar/imagemagick/7.1.1-39/bin/convert"}
 )
+from playwright.sync_api import sync_playwright
+
+def run_htmlcapture(playwright, url='https://example.com', output_path='example.png'):
+    # launch the browser
+    browser = playwright.chromium.launch()
+    # opens a new browser page
+    page = browser.new_page()
+    # navigate to the website
+    page.goto(url)
+    # take a full-page screenshot
+    page.screenshot(path=output_path, full_page=True)
+    # always close the browser
+    browser.close()
 
 
 class VideoClipHandler:
@@ -39,24 +51,58 @@ class VideoClipHandler:
         self.final_clip = CompositeVideoClip([self.final_clip, watermark])
 
 
+class Card(metaclass=ABCMeta):
+    start: int = 0
+    end: int = None
+
+    def first(self, moviemaker_parent:'MovieMaker'):
+        pass
+    def second(self, moviemaker_parent:'MovieMaker'):
+        pass
+    def third(self, moviemaker_parent:'MovieMaker'):
+        pass
+
+
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
-class SimpleVideo:
+class SimpleVideo(Card):
     src: str
+    start: int = 0
+    end: int = None
 
-    def render(self):
-        return VideoFileClip(self.src)
+    def first(self) ->VideoFileClip:
+        return VideoFileClip(self.src).subclip(self.start).subclip(0, self.end)
+
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
-class TitleCard:
-    message: str
+class HTMLCard(Card):
+    src: str
+    duration: int = 5
+    filename="example.png"
+    end: int = None
+    moviemaker_parent: 'MovieMaker' = None
 
-    def render(self):
+    def first(self) ->VideoFileClip:
+        with sync_playwright() as playwright:
+            run_htmlcapture(playwright, url=self.src, output_path=self.filename)
+        clip= ImageClip(self.filename)
+        clip = clip.set_duration(self.duration)
+        # clip = resize(clip, width=self.moviemaker_parent.video_clip.w / SCALE_FACTOR, height=self.final_clip.h / SCALE_FACTOR)
+        return clip
+
+@dataclass_json(undefined=Undefined.EXCLUDE)
+@dataclass
+class TitleCard(Card):
+    message: str
+    start: int = 0
+    end: int = None
+
+    def first(self):
         shot = ShotStack(template_name="TitleCard")
         shot.prepare("Title", {"TITLE_TEXT": self.message})
         fn = shot.poll()
-        return VideoFileClip(fn)
+        return VideoFileClip(fn).subclip(self.start).subclip(0, self.end)
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
@@ -75,6 +121,7 @@ class details:
         moviemaker_parent.video_clip.add_watermark(self.watermark)
         moviemaker_parent.video_clip.write_out(self.filename)
 
+
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class sequence:
@@ -82,8 +129,8 @@ class sequence:
     cards:list = field(default_factory=list)
     def first(self, moviemaker_parent:'MovieMaker'):
         for element in self.elements:
-            card = globals()[element.get("type")](**element)
-            moviemaker_parent.video_clip.add_clip(card.render())
+            card = globals()[element.get("type")](**element,moviemaker_parent=moviemaker_parent)
+            moviemaker_parent.video_clip.add_clip(card.first())
 
     def second(self, moviemaker_parent:'MovieMaker'):
         pass
@@ -109,7 +156,7 @@ class MovieMaker:
                 print(f"Error No such element?: {e}")
 
     def parse(self,method_name:str):
-        for section in self.raw_yaml_data:
+        for section in self.data:
             obj = self.data[section]
             getattr(obj, method_name)(moviemaker_parent=self)
 
