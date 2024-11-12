@@ -1,57 +1,128 @@
 from dataclasses import dataclass, field
-from typing import List
-from abc import ABC
+from typing import Any
 import yaml
 from dataclasses_json import dataclass_json, Undefined
+from moviepy.video.fx.resize import resize
+from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.video.VideoClip import VideoClip
 
-from render_video import TimeLineHandler
-from video_components import Title
+from moviepy.config import change_settings
+from moviepy.editor import *
+
+from utils import ShotStack
+
+change_settings(
+    {"IMAGEMAGICK_BINARY": "/usr/local/Cellar/imagemagick/7.1.1-39/bin/convert"}
+)
 
 
-class YamlSection(ABC):
-    def parse(self, *args, **kwargs):
-        pass
+class VideoClipHandler:
+    clips = []
+    screensize = (720, 460)
+    fps = 25
+    final_clip = VideoClip()
+
+    def add_clip(self, clip):
+        self.clips.append(clip)
+
+    def concat(self):
+        self.final_clip= concatenate_videoclips(self.clips)
+
+    def write_out(self, filename):
+        self.final_clip.write_videofile(filename, fps=self.fps, codec="mpeg4",)
+
+    def add_watermark(self, watermark):
+        watermark = ImageClip(watermark.get("src"))
+        SCALE_FACTOR = 8
+        watermark = resize(watermark, width=self.final_clip.w / SCALE_FACTOR, height=self.final_clip.h / SCALE_FACTOR)
+        watermark = watermark.set_duration(self.final_clip.duration).set_pos(("left", "top"))
+        self.final_clip = CompositeVideoClip([self.final_clip, watermark])
 
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
-class Details(YamlSection):
-    # handles the YAML details section
-    filename: str = "noname.mp4"
+class SimpleVideo:
+    src: str
 
-    def parse(self, moviemaker_parent):
+    def render(self):
+        return VideoFileClip(self.src)
+
+@dataclass_json(undefined=Undefined.EXCLUDE)
+@dataclass
+class TitleCard:
+    message: str
+
+    def render(self):
+        shot = ShotStack(template_name="TitleCard")
+        shot.prepare("Title", {"TITLE_TEXT": self.message})
+        fn = shot.poll()
+        return VideoFileClip(fn)
+
+@dataclass_json(undefined=Undefined.EXCLUDE)
+@dataclass
+class details:
+    # handles the YAML metadata section
+    filename: str = "noname.mp4"
+    watermark: dict[str:Any] = field(default_factory=dict)
+
+    def first(self, moviemaker_parent:'MovieMaker'):
         moviemaker_parent.filename = self.filename
 
+    def second(self, moviemaker_parent:'MovieMaker'):
+        moviemaker_parent.result_video=moviemaker_parent.video_clip.concat()
+
+    def third(self, moviemaker_parent:'MovieMaker'):
+        moviemaker_parent.video_clip.add_watermark(self.watermark)
+        moviemaker_parent.video_clip.write_out(self.filename)
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
-class Sequence(YamlSection):
-    elements: List = field(default_factory=list)
-    component_lookup = {"Title": Title}
+class sequence:
+    elements: list = field(default_factory=list)
+    cards:list = field(default_factory=list)
+    def first(self, moviemaker_parent:'MovieMaker'):
+        for element in self.elements:
+            card = globals()[element.get("type")](**element)
+            moviemaker_parent.video_clip.add_clip(card.render())
 
-    def parse(self, moviemaker_parent):
-        for frame in self.elements:
-            frame_entity = self.component_lookup.get(frame.get("type"))(**frame)
-            moviemaker_parent.sequence.append(frame_entity)
+    def second(self, moviemaker_parent:'MovieMaker'):
+        pass
+
+    def third(self, moviemaker_parent:'MovieMaker'):
+        pass
 
 
 @dataclass()
 class MovieMaker:
-    sequence: List = field(default_factory=list)
-    video_clip: TimeLineHandler = TimeLineHandler()
-    filename: str = "noname.mp4"
+    data:dict = field(default_factory=dict)
+    video_clip: VideoClipHandler = VideoClipHandler()
+    raw_yaml_data:dict=field(default_factory=dict)
 
-    def ingest_yaml(self, file):
-        content = yaml.safe_load(file)
-        section_ookup = {"details": Details, "sequence": Sequence}
-        for section in content:
-            klass = section_ookup.get(section)
-            # we don't allow top level lists or anything special
-            init_vars = content.get(section, {})
-            r = klass(**init_vars)
-            r.parse(self)
+    def prepare(self, file):
+        self.raw_yaml_data = yaml.safe_load(file)
+        for section in self.raw_yaml_data:
+            init_vars = self.raw_yaml_data.get(section, {})
+            try:
+                klass=globals()[section]
+                self.data[section] = klass(**init_vars)
+            except (KeyError, TypeError) as e:
+                print(f"Error No such element?: {e}")
 
-    def render(self):
-        for frame in self.sequence:
-            self.video_clip.add_clip(frame.render())
-        self.video_clip.render(self.filename)
+    def parse(self,method_name:str):
+        for section in self.raw_yaml_data:
+            obj = self.data[section]
+            getattr(obj, method_name)(moviemaker_parent=self)
+
+    def first(self):
+        self.parse("first")
+
+    def second(self):
+        self.parse("second")
+
+    def third(self):
+        self.parse("third")
+
+    def execute(self):
+        self.first()
+        self.second()
+        self.third()
