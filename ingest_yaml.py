@@ -8,7 +8,7 @@ from moviepy.video.fx.resize import resize
 from moviepy.config import change_settings
 from moviepy.editor import *
 
-from utils import ShotStack
+from utils import ShotStack, SynthesiaHandler
 
 change_settings(
     {"IMAGEMAGICK_BINARY": "/usr/local/Cellar/imagemagick/7.1.1-39/bin/convert"}
@@ -34,7 +34,9 @@ class VideoClipHandler:
     fps = 25
     final_clip = VideoClip()
 
-    def add_clip(self, clip):
+    def add_clip(self, clip:VideoClip):
+        # conform the clip to the output requirements
+        clip = clip.resize(self.screensize).fadeout(0.1)
         self.clips.append(clip)
 
     def concat(self):
@@ -44,7 +46,6 @@ class VideoClipHandler:
         self.final_clip.write_videofile(filename, fps=self.fps, codec="mpeg4",)
 
     def add_watermark(self, watermark):
-        watermark = ImageClip(watermark.get("src"))
         SCALE_FACTOR = 8
         watermark = resize(watermark, width=self.final_clip.w / SCALE_FACTOR, height=self.final_clip.h / SCALE_FACTOR)
         watermark = watermark.set_duration(self.final_clip.duration).set_pos(("left", "top"))
@@ -71,7 +72,23 @@ class SimpleVideo(Card):
     end: int = None
 
     def first(self) ->VideoFileClip:
-        return VideoFileClip(self.src).subclip(self.start).subclip(0, self.end)
+        return VideoFileClip(self.src).subclip(self.start, self.end)
+
+
+@dataclass_json(undefined=Undefined.EXCLUDE)
+@dataclass
+class TalkingHeadCard(Card):
+    script: str
+    start: int = 0
+    end: int = None
+    src = ''
+
+    def first(self) ->VideoFileClip:
+        synthesia = SynthesiaHandler()
+        synthesia.script = self.script
+        synthesia.prepare()
+        self.src = synthesia.poll()
+        return VideoFileClip(self.src).subclip(self.start, self.end)
 
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
